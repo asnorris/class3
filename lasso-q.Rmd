@@ -1,0 +1,269 @@
+---
+title: 'Gov 2018: Lab 3 LASSO'
+author:
+- 'Adeline Lo'
+- 'Your name: '
+date: "Tuesday February 8, 2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Question 1. Setting up New York Times Annotated Corpus
+
+### Question 1.1
+
+Today, we are going to analyze the New York Times Annonated Corpus. From Canvas please download `NYT.RData` and load the file.
+
+This loads a list, `nyt_list`, with the following components:
+
+- train : the document term matrix for the training set
+- train_label: an indicator equal to 1 if the story comes from the national desk for each document in the training set
+- test: the document term matrix for the test set.
+- test_label: an indicator equal to 1 if the story comes from the national desk for each document in the test set
+
+We will work with `train` and `train_label` to build our prediction models. We will use the `test` set to test the fit of our model.  
+
+Put these components in individual objects (name each component as a separate object that is easy to understand for you and the reader).
+
+```{r}
+library(tidyverse)
+# load in data
+load("NYT.RData")
+
+train<- nyt_list$train
+train_label<- nyt_list$train_label
+test<- nyt_list$test
+test_label<- nyt_list$test_label
+
+# seperate training and testing data
+train.df <- data.frame(nyt_list$train, nyt_list$train_label) %>%
+  mutate(train_label = nyt_list.train_label) %>%
+  select(!nyt_list.train_label)
+
+test.df <- data.frame(nyt_list$test, nyt_list$test_label) %>%
+  mutate(test_label = nyt_list.test_label) %>%
+  select(!nyt_list.test_label)
+
+```
+
+### Question 1.2 
+
+Print the dimensions of the train and test set. What is the ratio of $n$ to the number of covariates?
+
+Note that the `train` and `test` matrices do not contain a column for the labels. Combine the dtm and labels into two data frames for the train set and for the test set.
+
+```{r}
+
+# print data dimensions - returns columns and rows
+dim(train)
+dim(test)
+
+# ratios of columns(covariates) to rows(n)
+
+nrow(train) / ncol(train)
+nrow(test) / ncol(test)
+
+```
+
+
+## 2. Linear Probability Model
+
+### Question 2.1 
+
+We are ready to apply a linear probability model to perform classification. Using the `lm` function regress `train_label` against all the words in train. To do this, note that you can include all the variable in a regression using the following syntax:
+`full_reg <- lm(train_label ~ . , data = train.df)`
+
+The `~.` tells R to include all the variables in the data frame.
+
+Analyze the coefficients from full_reg , what do you notice? Specifically, what happens to the number of coefficients in the model?
+
+```{r}
+
+# run regression
+
+full_ref <- lm(train_label ~ ., data = train.df)
+
+summary(full_ref)
+
+# number of NA coefficients in the model
+length(which(is.na(full_ref$coeff)==T))
+
+```
+
+There are a lot of covariates, none of which have significant effects and about 50% of which have NA values as coefficients.
+
+
+### Question 2.2
+
+We are now going to make predictions using the training data and the test data and compare their properties.
+
+Using the `predict` function, make predictions for all observations in the training set. Then, classify the documents as national or not using a threshold of 0.5. Assess your classification to the actual data. Create a 2x2 table of the predicted train labels and true train label and note your findings.
+
+```{r}
+# train is a matrix
+train_pred <- predict(full_ref, as.data.frame(train))
+
+class_doc <- ifelse(train_pred > 0.5,1,0)
+
+table(class_doc, train_label)
+
+
+
+```
+
+As shown by the 0s, there is perfect prediction - this means the model is over fit.
+
+### Question 2.3
+
+Now, use the model to make a prediction for the *test* data and classify using a 0.5 threshold.
+
+Assess the accuracy of your classification by comparing it to the actual test data. What do you notice? What would happen if you randomly guessed the test labels using a prior on the probability of 1 as the proportion of 1s in the train labels? Remember to `set.seed(12019)`. Compare your findings between the two methods.
+
+```{r}
+
+set.seed(12019)
+
+# do same with test
+
+test_pred <- predict(full_ref, as.data.frame(test))
+
+class_pred <- ifelse(test_pred > 0.5,1,0)
+
+table(class_pred, test_label)
+
+
+# test the accuracy
+
+
+accuracy <-sum(class_pred==test_label) / length(test_label)
+accuracy
+
+
+
+# randomly guess to see if using the model makes for a better prediction than random
+random_guess <- rbinom(length(test_label), 
+                     prob = sum(train_label)/length(train_label),
+                     size = 1)
+accuracy2 <- sum(diag(table(random_guess, test_label)))/length(test_label)
+accuracy2
+
+```
+
+The random guess is accuracy about 61% of the time and the model I made is accuracy about 45% of time - the model is WORSE than random.
+
+
+## 3. Fit LASSO regression
+
+### Question 3.1
+
+We are going to use the `glmnet` library to fit the LASSO regression. Load the package.
+
+The syntax for the glmnet model is as follows:
+`lasso <- glmnet(x = train, y = train_label)`
+
+This defaults to linear regression. To do logistic regression you can fit the same model, but add
+`lasso_logist <- glmnet(x = train, y = train_label, family = 'binomial')`
+
+Fit a LASSO linear regression.
+
+
+```{r}
+
+# install package glm net
+library(glmnet)
+
+set.seed(12019)
+
+lasso <- glmnet(x = train, y = train_label)
+
+```
+
+
+### Question 3.2 
+
+The LASSO function automatically fits the model for several values of $\lambda$, and produces $\beta$ values for all covariates for each value of $\lambda$ all of which is found in the object `lasso$beta`.  
+
+Sum up the absolute values of `lasso$beta` for each column. Plot that against `lasso$lambda`. What generally happens as $\lambda$ increases?  
+
+```{r}
+
+# create a sum that includes absolute value of betas
+sum_beta <- colSums(abs(lasso$beta))
+
+# plot beta versus lambda
+
+plot(sum_beta ~ lasso$lambda, pch=16, col = "red", xlab = "Lambda", ylab = "Sum of Betas")
+
+```
+
+
+### Question 3.3
+
+There are different methods to selecting lambda, which we set aside for another day.  Today, we're going to set a particular value of lambda arbitrarily and then assess its performance. We will set lambda to 0.05.
+
+Formulate predictions for the training set using the following syntax:
+`lasso_pred <- predict(lasso, newx=train, s = 0.05 )`
+
+- `lasso` is the lasso regression
+- `newx` are the values you want to predict
+- `s` is the value of lambda.
+
+Classify the observations using a threshold of 0.5. Then assess the accuracy of those predictions by comparing them to the training set labels and create a confusion matrix. Do the same but use a threshold of prior information on the training set -- the proportion of 1s. Which threshold is better?
+
+```{r}
+# do the same as 2.3 but with lasso 
+# formulate predictions
+# classify obs using threshold of 0.5
+# create confusion matrix
+# get accuracy score
+
+
+lasso_pred <- predict(lasso, newx=train, s = 0.05 )
+class_lasso1 <- ifelse(lasso_pred>0.5, 1, 0)
+table(class_lasso1, train_label)
+(sum(class_lasso1 & train_label) + sum(!class_lasso1 & !train_label)) / length(train_label)
+
+# classify obs using threshold with prior
+# create confusion matrix
+# get accuracy score
+
+class_lasso2 <- ifelse(lasso_pred>sum(train_label)/length(train_label), 1, 0)
+table(class_lasso2, train_label)
+(sum(class_lasso2 & train_label) + sum(!class_lasso2 & !train_label)) / length(train_label)
+
+
+```
+
+0.91 and 0.9 are not perfect which means that there is less model dependence than before. These values are also different from eachother which means that using a threshold matters.
+
+### Question 3.4 
+
+Now formulate predictions for the test set,  classify the documents as national or not with a threshold using the prior proportion of 1 labels in the training set as well as 0.5, and assess the accuracy of those predictions by comparing them to the test set labels.  What do you notice about the quality of the predictions from LASSO relative to the predictions from OLS?
+
+```{r}
+
+# do the same thing as above but with the test data
+
+
+lasso_test <- predict(lasso, newx=test, s = 0.05 )
+class_lasso_test <- ifelse(lasso_test>sum(train_label)/length(train_label), 1, 0)
+table(class_lasso_test, test_label)
+accuracy3 <- (sum(class_lasso_test & test_label) + sum(!class_lasso_test & !test_label)) / length(test_label)
+accuracy3
+
+# classify obs using threshold of 0.5
+class_lasso_test2 <- ifelse(lasso_test>sum(train_label)/length(train_label), 1, 0)
+table(class_lasso_test2, test_label)
+accuracy4<-(sum(class_lasso_test2 & test_label) + sum(!class_lasso_test2 & !test_label)) / length(test_label)
+accuracy4
+
+
+
+```
+
+The accuracy for this model is around 83% which is much higher than the 45% of the original model. That being said, this accuracy is less than that of the model with the training data indicating that there is slight model dependence.
